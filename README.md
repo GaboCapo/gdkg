@@ -18,7 +18,7 @@ It automates deploy key workflows and ensures a clean, secure setup.
 
 ---
 
-## 📦 Installation
+## 📦 Installation / Run
 
 ### From source
 
@@ -31,6 +31,38 @@ cd gdkg
 Binary will be available as `./gdkg`.
 
 > Requires Go 1.20`
+
+
+### Run from Releases
+
+Download the appropriate binary for your platform from the [[Releases]] section and place it in a directory of your choice.
+
+> **Note:** This is a console-based CLI tool and must be executed from a terminal or command prompt. Double-clicking will not work.
+
+#### Example (Linux):
+
+1. **Make the binary executable:**
+
+```bash
+chmod `x gdkg-v1.0.0-linux-amd64
+```
+
+2. **Run the application via terminal:**
+
+```bash
+./gdkg-v1.0.0-linux-amd64
+```
+
+3. **Console output will look like this:**
+
+```text
+=== GitHub Deploy Key Generator ===
+1: Generate deploy key
+2: Remove deploy key
+3: Quit
+Please select an option:
+```
+
 
 ---
 
