@@ -1,3 +1,5 @@
+<img width="1280" height="640" alt="Image" src="https://github.com/user-attachments/assets/33d54d7a-bf54-499c-87ed-b138971503da" />
+
 # 🔐 gdkg – GitHub Deploy Key Generator
 
 `gdkg` is a lightweight Go CLI tool for securely generating, managing, and revoking **SSH Deploy Keys** for GitHub repositories.
