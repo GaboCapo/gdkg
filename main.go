@@ -3,15 +3,12 @@ package main
 import (
 	"bufio"
 	"bytes"
-	"crypto/ed25519"
-	"crypto/rand"
-	"encoding/base64"
-	"encoding/pem"
 	"errors"
 	"fmt"
 	"io"
 	"log"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -85,23 +82,22 @@ func generateKey(scanner *bufio.Scanner) {
 		}
 	}
 
-	// Generate Ed25519 key pair
-	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	// Generate Ed25519 key pair using ssh-keygen
+	cmd := exec.Command("ssh-keygen", "-t", "ed25519", "-C", email, "-f", privPath, "-N", "")
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		log.Fatal("Failed to generate key pair with ssh-keygen:", err)
+	}
+
+	// Read and display public key for GitHub
+	pubKeyBytes, err := os.ReadFile(pubPath)
 	if err != nil {
-		log.Fatal("Key generation failed:", err)
+		log.Fatal("Failed to read public key:", err)
 	}
-
-	// Write private key in PEM format
-	privPem := encodePrivateKeyToPEM(priv.Seed())
-	if err := os.WriteFile(privPath, privPem, 0600); err != nil {
-		log.Fatal("Failed to write private key:", err)
-	}
-
-	// Write public key in OpenSSH format
-	sshPubKey := formatSSHPubKey(pub, email)
-	if err := os.WriteFile(pubPath, []byte(sshPubKey), 0644); err != nil {
-		log.Fatal("Failed to write public key:", err)
-	}
+	fmt.Println("\n--- COPY THE PUBLIC KEY BELOW TO GITHUB ---")
+	fmt.Printf("%s", string(pubKeyBytes))
+	fmt.Println("Add this key to your GitHub repository under Settings > Deploy keys")
 
 	// Ask for GitHub username or organization
 	githubUser, err := askInput(scanner, "GitHub username or organization: ")
@@ -120,6 +116,14 @@ func generateKey(scanner *bufio.Scanner) {
 			fmt.Println("SSH config entry added.")
 			fmt.Printf("Use this Git remote URL to use the deploy key:\n")
 			fmt.Printf("git@%s:%s/%s.git\n", alias, githubUser, repo)
+
+			// Automatically add the private key to ssh-agent
+			if err := addKeyToSSHAgent(privPath); err != nil {
+				fmt.Printf("Warning: Failed to add key to ssh-agent: %v\n", err)
+				fmt.Println("You may need to manually run: ssh-add", privPath)
+			} else {
+				fmt.Println("Private key added to ssh-agent.")
+			}
 		}
 	}
 
@@ -151,6 +155,38 @@ func revokeKey(scanner *bufio.Scanner) {
 	// Key file paths
 	privPath := filepath.Join(dir, repo+"_deploy-key")
 	pubPath := privPath + ".pub"
+
+	// Diagnose: Print SSH_AUTH_SOCK
+	sshAuthSock := os.Getenv("SSH_AUTH_SOCK")
+	if sshAuthSock == "" {
+		fmt.Println("Warning: SSH_AUTH_SOCK is not set, ssh-agent may not be running.")
+	} else {
+		fmt.Printf("Using SSH_AUTH_SOCK: %s\n", sshAuthSock)
+	}
+
+	// Get the fingerprint of the key if the file exists
+	var fingerprint string
+	if fileExists(privPath) {
+		fingerprint, err = getKeyFingerprint(privPath)
+		if err != nil {
+			fmt.Printf("Warning: Could not get fingerprint for %s: %v\n", privPath, err)
+		}
+	}
+
+	// Remove key from ssh-agent
+	if fingerprint != "" && isKeyInSSHAgent(fingerprint) {
+		if err := removeKeyFromSSHAgent(privPath); err != nil {
+			fmt.Printf("Warning: Failed to remove key from ssh-agent: %v\n", err)
+			fmt.Println("You may need to manually remove all keys using: ssh-add -D")
+		} else {
+			fmt.Println("Private key removed from ssh-agent.")
+		}
+	} else {
+		fmt.Println("Key not found in ssh-agent or no valid fingerprint, skipping removal.")
+		if !fileExists(privPath) {
+			fmt.Println("Note: Private key file does not exist, cannot verify fingerprint.")
+		}
+	}
 
 	// Remove key files
 	removeFileWithInfo(privPath, "private key")
@@ -204,30 +240,6 @@ func userHomeDir() string {
 		log.Fatal("Cannot determine home directory:", err)
 	}
 	return home
-}
-
-func encodePrivateKeyToPEM(seed []byte) []byte {
-	pkcs8prefix := []byte{
-		0x30, 0x2c, // SEQUENCE, length 44
-		0x02, 0x01, 0x00, // Version = 0
-		0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, // AlgorithmIdentifier OID 1.3.101.112
-		0x04, 0x20, // OCTET STRING (32 bytes)
-	}
-	data := append(pkcs8prefix, seed...)
-	return pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: data})
-}
-
-func formatSSHPubKey(pub ed25519.PublicKey, comment string) string {
-	var b bytes.Buffer
-	b.WriteString("ssh-ed25519 ")
-	b64 := base64.StdEncoding.EncodeToString(pub)
-	b.WriteString(b64)
-	if comment != "" {
-		b.WriteByte(' ')
-		b.WriteString(comment)
-	}
-	b.WriteByte('\n')
-	return b.String()
 }
 
 func addSSHConfigEntry(alias, privPath string) error {
@@ -294,4 +306,80 @@ func backupFile(path string) error {
 	defer output.Close()
 	_, err = io.Copy(output, input)
 	return err
+}
+
+func addKeyToSSHAgent(keyPath string) error {
+	// Check if ssh-agent is running
+	cmd := exec.Command("ssh-add", "-l")
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("ssh-agent is not running or inaccessible: %v", err)
+	}
+
+	// Add the key to ssh-agent
+	cmd = exec.Command("ssh-add", keyPath)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("failed to add key to ssh-agent: %v", err)
+	}
+	return nil
+}
+
+func getKeyFingerprint(keyPath string) (string, error) {
+	cmd := exec.Command("ssh-keygen", "-l", "-f", keyPath)
+	output, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("failed to get fingerprint: %v", err)
+	}
+
+	// Parse the fingerprint from the output, e.g.:
+	// 256 SHA256:GXfx:FizweV/CU2MsaYgH0U20kpLGZxg/2M4mXVEu3L7u+c no-email@example.com (ED25519)
+	lines := strings.Split(string(output), "\n")
+	if len(lines) == 0 || lines[0] == "" {
+		return "", fmt.Errorf("no fingerprint found in output")
+	}
+	parts := strings.Fields(lines[0])
+	if len(parts) < 2 {
+		return "", fmt.Errorf("invalid fingerprint format")
+	}
+	return parts[1], nil // Return the fingerprint (e.g., SHA256:GXfx:FizweV/...)
+}
+
+func isKeyInSSHAgent(fingerprint string) bool {
+	if fingerprint == "" {
+		return false
+	}
+
+	cmd := exec.Command("ssh-add", "-l")
+	output, err := cmd.Output()
+	if err != nil {
+		fmt.Printf("Warning: Could not list ssh-agent keys: %v\n", err)
+		return false // SSH-Agent nicht erreichbar oder leer
+	}
+
+	// Check if the fingerprint is in the output of ssh-add -l
+	lines := strings.Split(string(output), "\n")
+	for _, line := range lines {
+		if strings.Contains(line, fingerprint) {
+			return true
+		}
+	}
+	return false
+}
+
+func removeKeyFromSSHAgent(keyPath string) error {
+	// Check if ssh-agent is running
+	cmd := exec.Command("ssh-add", "-l")
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("ssh-agent is not running or inaccessible: %v", err)
+	}
+
+	// Try to remove the key from ssh-agent
+	cmd = exec.Command("ssh-add", "-d", keyPath)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("failed to remove key from ssh-agent: %v", err)
+	}
+	return nil
 }
