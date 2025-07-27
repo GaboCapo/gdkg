@@ -20,7 +20,7 @@ It automates deploy key workflows and ensures a clean, secure setup.
 
 ## 📦 Installation / Run
 
-### From source
+### From source (if you want to develop or test it)
 
 > Requires Go 1.20
 
@@ -38,7 +38,7 @@ cd gdkg
 
 Binary will be available as `./gdkg`.
 
-### Run from Releases
+### Run from Releases (if you want to use it right away without development)
 
 Download the appropriate binary for your platform from the [Releases](https://github.com/GaboCapo/gdkg/releases) section and place it in a directory of your choice.
 
