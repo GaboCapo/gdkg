@@ -2,16 +2,19 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/pem"
+	"errors"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
+	"time"
 )
 
 func main() {
@@ -22,7 +25,9 @@ func main() {
 
 	scanner := bufio.NewScanner(os.Stdin)
 	fmt.Print("Please select an option: ")
-	scanner.Scan()
+	if !scanner.Scan() {
+		log.Fatal("Failed to read input:", scanner.Err())
+	}
 	choice := scanner.Text()
 
 	switch choice {
@@ -36,193 +41,257 @@ func main() {
 }
 
 func generateKey(scanner *bufio.Scanner) {
-	fmt.Print("Repository-Name: ")
-	scanner.Scan()
-	repo := scanner.Text()
+	// Repository name
+	repo, err := askInput(scanner, "Repository-Name: ")
+	if err != nil || repo == "" {
+		log.Fatal("Invalid repository name")
+	}
+	if strings.ContainsAny(repo, `/\ `) {
+		log.Fatal("Repository name contains invalid characters")
+	}
 
-	fmt.Print("Email address for SSH comment: ")
-	scanner.Scan()
-	email := scanner.Text()
+	// Email for SSH comment
+	email, err := askInput(scanner, "Email address for SSH comment (optional): ")
+	if err != nil {
+		log.Fatal("Failed to read email:", err)
+	}
+	if email == "" {
+		email = "no-email@example.com"
+	}
 
+	// Target directory for keys
 	home := userHomeDir()
-	fmt.Printf("Target dir for key files (default: %s/.ssh): ", home)
-	scanner.Scan()
-	dir := scanner.Text()
+	dir, err := askInput(scanner, fmt.Sprintf("Target dir for key files (default: %s/.ssh): ", home))
+	if err != nil {
+		log.Fatal("Failed to read target directory:", err)
+	}
 	if dir == "" {
 		dir = filepath.Join(home, ".ssh")
 	}
-
-	err := os.MkdirAll(dir, 0700)
-	if err != nil {
+	if err := os.MkdirAll(dir, 0700); err != nil {
 		log.Fatal("Failed to create directory:", err)
 	}
 
+	// Key file paths
 	privPath := filepath.Join(dir, repo+"_deploy-key")
 	pubPath := privPath + ".pub"
 
+	// Check if files already exist
+	if fileExists(privPath) || fileExists(pubPath) {
+		fmt.Printf("Warning: Key files already exist: %s and/or %s\n", privPath, pubPath)
+		overwrite, err := askInput(scanner, "Do you want to overwrite them? (y/N): ")
+		if err != nil || strings.ToLower(overwrite) != "y" {
+			log.Fatal("Operation aborted by user")
+		}
+	}
+
+	// Generate Ed25519 key pair
 	pub, priv, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
-		log.Fatal(err)
+		log.Fatal("Key generation failed:", err)
 	}
 
-	err = os.WriteFile(privPath, encodePEM(priv.Seed()), 0600)
-	if err != nil {
-		log.Fatal(err)
+	// Write private key in PEM format
+	privPem := encodePrivateKeyToPEM(priv.Seed())
+	if err := os.WriteFile(privPath, privPem, 0600); err != nil {
+		log.Fatal("Failed to write private key:", err)
 	}
 
+	// Write public key in OpenSSH format
 	sshPubKey := formatSSHPubKey(pub, email)
-	err = os.WriteFile(pubPath, []byte(sshPubKey), 0644)
-	if err != nil {
-		log.Fatal(err)
+	if err := os.WriteFile(pubPath, []byte(sshPubKey), 0644); err != nil {
+		log.Fatal("Failed to write public key:", err)
 	}
 
-	fmt.Println("\n--- PUBLIC KEY (Add to GitHub Repository Settings) ---")
-	fmt.Println(sshPubKey)
+	// Ask for GitHub username or organization
+	githubUser, err := askInput(scanner, "GitHub username or organization: ")
+	if err != nil || githubUser == "" {
+		log.Fatal("Invalid GitHub username or organization")
+	}
 
 	// SSH config entry
-	fmt.Print("\nCreate matching SSH config entry? (Y/n): ")
-	scanner.Scan()
-	ans := strings.TrimSpace(scanner.Text())
-	if ans == "" || strings.ToLower(ans) == "y" {
-		err = addSSHConfigEntry(dir, repo, privPath)
-		if err != nil {
+	createConfig, err := askInput(scanner, "\nCreate matching SSH config entry? (Y/n): ")
+	if err == nil && (createConfig == "" || strings.ToLower(createConfig) == "y") {
+		alias := "github-" + repo
+		fmt.Printf("Using SSH host alias: %s\n", alias)
+		if err := addSSHConfigEntry(alias, privPath); err != nil {
 			fmt.Println("Failed to update SSH config:", err)
 		} else {
 			fmt.Println("SSH config entry added.")
 			fmt.Printf("Use this Git remote URL to use the deploy key:\n")
-			fmt.Printf("git@github.com-%s:user/%s.git\n", repo, repo)
+			fmt.Printf("git@%s:%s/%s.git\n", alias, githubUser, repo)
 		}
 	}
 
-	// Push-Befehle (EN)
+	// Git push commands
 	fmt.Println("\n--- COPY BELOW TO PUSH USING YOUR DEPLOY KEY ---")
-	fmt.Println("# Safe Mode (Recommended)")
+	fmt.Println("# Safe Mode (recommended)")
 	fmt.Printf("GIT_SSH_COMMAND=\"ssh -i %s\" git push origin main\n", privPath)
-
 	fmt.Println()
-	fmt.Println("# Advanced Mode (for scripting, skips host key check)")
+	fmt.Println("# Advanced Mode (for scripting, disables host key checking)")
 	fmt.Printf("GIT_SSH_COMMAND=\"ssh -i %s -o StrictHostKeyChecking=no\" git push origin main\n", privPath)
-
-	fmt.Printf("\n# Note: These commands are only valid for pushing to the GitHub repository named '%s'\n", repo)
 }
 
 func revokeKey(scanner *bufio.Scanner) {
-	fmt.Print("Repository name to remove: ")
-	scanner.Scan()
-	repo := strings.TrimSpace(scanner.Text())
+	// Repository name
+	repo, err := askInput(scanner, "Repository name to remove: ")
+	if err != nil || repo == "" {
+		log.Fatal("Invalid repository name")
+	}
 
-	fmt.Print("Directory of the key (press ENTER to use ~/.ssh): ")
-	scanner.Scan()
-	dir := scanner.Text()
+	// Key directory
+	dir, err := askInput(scanner, "Directory of the key (press ENTER to use ~/.ssh): ")
+	if err != nil {
+		log.Fatal("Failed to read directory:", err)
+	}
 	if dir == "" {
 		dir = filepath.Join(userHomeDir(), ".ssh")
 	}
 
+	// Key file paths
 	privPath := filepath.Join(dir, repo+"_deploy-key")
 	pubPath := privPath + ".pub"
 
-	os.Remove(privPath)
-	os.Remove(pubPath)
-	fmt.Println("Deploy key files removed.")
+	// Remove key files
+	removeFileWithInfo(privPath, "private key")
+	removeFileWithInfo(pubPath, "public key")
 
+	// SSH config path
 	configPath := filepath.Join(userHomeDir(), ".ssh", "config")
-	if _, err := os.Stat(configPath); err == nil {
-		removeSSHConfigBlock(configPath, repo)
+	if fileExists(configPath) {
+		// Backup SSH config
+		if err := backupFile(configPath); err != nil {
+			fmt.Println("Warning: Failed to backup SSH config:", err)
+		}
+		// Remove SSH config entry
+		alias := "github-" + repo
+		if err := removeSSHConfigBlock(configPath, alias); err != nil {
+			fmt.Println("Warning: Failed to remove SSH config entry:", err)
+		} else {
+			fmt.Println("SSH config entry removed.")
+		}
 	}
 }
 
-func addSSHConfigEntry(dir, repo, privPath string) error {
+func askInput(scanner *bufio.Scanner, prompt string) (string, error) {
+	fmt.Print(prompt)
+	if !scanner.Scan() {
+		return "", scanner.Err()
+	}
+	return strings.TrimSpace(scanner.Text()), nil
+}
+
+func removeFileWithInfo(path string, desc string) {
+	if err := os.Remove(path); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			fmt.Printf("%s file not found: %s\n", desc, path)
+		} else {
+			fmt.Printf("Error deleting %s file %s: %v\n", desc, path, err)
+		}
+	} else {
+		fmt.Printf("%s file deleted: %s\n", desc, path)
+	}
+}
+
+func fileExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
+}
+
+func userHomeDir() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		log.Fatal("Cannot determine home directory:", err)
+	}
+	return home
+}
+
+func encodePrivateKeyToPEM(seed []byte) []byte {
+	pkcs8prefix := []byte{
+		0x30, 0x2c, // SEQUENCE, length 44
+		0x02, 0x01, 0x00, // Version = 0
+		0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, // AlgorithmIdentifier OID 1.3.101.112
+		0x04, 0x20, // OCTET STRING (32 bytes)
+	}
+	data := append(pkcs8prefix, seed...)
+	return pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: data})
+}
+
+func formatSSHPubKey(pub ed25519.PublicKey, comment string) string {
+	var b bytes.Buffer
+	b.WriteString("ssh-ed25519 ")
+	b64 := base64.StdEncoding.EncodeToString(pub)
+	b.WriteString(b64)
+	if comment != "" {
+		b.WriteByte(' ')
+		b.WriteString(comment)
+	}
+	b.WriteByte('\n')
+	return b.String()
+}
+
+func addSSHConfigEntry(alias, privPath string) error {
 	configPath := filepath.Join(userHomeDir(), ".ssh", "config")
-
-	content := ""
-	if data, err := os.ReadFile(configPath); err == nil {
-		content = string(data)
+	content, err := os.ReadFile(configPath)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	if bytes.Contains(content, []byte("Host "+alias)) {
+		return fmt.Errorf("SSH config entry for Host %s already exists", alias)
 	}
 
-	if strings.Contains(content, "Host github.com-"+repo) {
-		return fmt.Errorf("SSH config entry for repo '%s' already exists", repo)
-	}
-
-	entry := fmt.Sprintf(`
-Host github.com-%s
-  HostName github.com
-  User git
-  IdentityFile %s
-  IdentitiesOnly yes
-`, repo, privPath)
-
+	entry := fmt.Sprintf("\nHost %s\n\tHostName github.com\n\tUser git\n\tIdentityFile %s\n\tIdentitiesOnly yes\n", alias, privPath)
 	f, err := os.OpenFile(configPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)
 	if err != nil {
 		return err
 	}
 	defer f.Close()
-
 	_, err = f.WriteString(entry)
 	return err
 }
 
-func removeSSHConfigBlock(configPath, repo string) {
-	input, err := os.ReadFile(configPath)
+func removeSSHConfigBlock(configPath, alias string) error {
+	content, err := os.ReadFile(configPath)
 	if err != nil {
-		fmt.Println("Warning: Failed to read SSH config:", err)
-		return
+		return err
 	}
-
-	lines := strings.Split(string(input), "\n")
-	var output []string
-	skip := false
+	lines := strings.Split(string(content), "\n")
+	var out []string
+	inBlock := false
+	hostLine := "Host " + alias
 	for _, line := range lines {
-		if strings.HasPrefix(line, "Host ") && strings.Contains(line, repo) {
-			skip = true
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "Host ") && strings.Contains(trimmed, hostLine) {
+			inBlock = true
 			continue
 		}
-		if skip {
-			if strings.HasPrefix(line, "Host ") {
-				skip = false
+		if inBlock {
+			if strings.HasPrefix(trimmed, "Host ") && !strings.Contains(trimmed, hostLine) {
+				inBlock = false
+			} else {
+				continue
 			}
 		}
-		if !skip {
-			output = append(output, line)
+		if !inBlock {
+			out = append(out, line)
 		}
 	}
+	return os.WriteFile(configPath, []byte(strings.Join(out, "\n")), 0600)
+}
 
-	err = os.WriteFile(configPath, []byte(strings.Join(output, "\n")), 0600)
+func backupFile(path string) error {
+	timestamp := time.Now().Format("20060102T150405")
+	backupPath := fmt.Sprintf("%s.backup.%s", path, timestamp)
+	input, err := os.Open(path)
 	if err != nil {
-		fmt.Println("Warning: Failed to update SSH config:", err)
-		return
+		return err
 	}
-
-	fmt.Println("SSH config block removed (if existed).")
-}
-
-func encodePEM(data []byte) []byte {
-	return pem.EncodeToMemory(&pem.Block{
-		Type:  "PRIVATE KEY",
-		Bytes: data,
-	})
-}
-
-func formatSSHPubKey(pub ed25519.PublicKey, comment string) string {
-	key := append([]byte{0, 0, 0, 11}, []byte("ssh-ed25519")...)
-	key = append(key, encodeLengthAndData(pub)...)
-	encoded := base64.StdEncoding.EncodeToString(key)
-	return fmt.Sprintf("ssh-ed25519 %s %s", encoded, comment)
-}
-
-func encodeLengthAndData(data []byte) []byte {
-	l := len(data)
-	return append([]byte{
-		byte(l >> 24),
-		byte(l >> 16),
-		byte(l >> 8),
-		byte(l),
-	}, data...)
-}
-
-func userHomeDir() string {
-	if runtime.GOOS == "windows" {
-		return os.Getenv("USERPROFILE")
+	defer input.Close()
+	output, err := os.Create(backupPath)
+	if err != nil {
+		return err
 	}
-	return os.Getenv("HOME")
+	defer output.Close()
+	_, err = io.Copy(output, input)
+	return err
 }
-

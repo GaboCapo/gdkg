@@ -1,0 +1,62 @@
+# Go-specific
+*.test
+*.out
+go.sum
+vendor/
+bin/
+build/
+
+# Project-specific build output
+gdkg*
+!gdkg-v*.tar.gz  # Allow release tarballs, if created
+
+# Temporary files
+*.tmp
+*.log
+*.swp
+*.swo
+*.bak
+*.backup.*
+
+# Security-sensitive files
+*_deploy-key
+*_deploy-key.pub
+config.backup.*
+.env
+*.pem
+secrets.yaml
+credentials.json
+*.key
+*.cert
+
+# Editor and IDE files
+.idea/
+.vscode/
+*.code-workspace
+*.sublime-project
+*.sublime-workspace
+
+# OS-specific
+.DS_Store
+Thumbs.db
+
+# Cache directories
+.cache/
+go-build/
+
+# Test and documentation (for future extensions)
+testdata/
+coverage.out
+docs/generated/
+
+# CI/CD and container artifacts
+dist/
+*.tar.gz
+*.zip
+Dockerfile.local
+*.dockerignore
+
+# Miscellaneous
+tmp/
+temp/
+*.prof
