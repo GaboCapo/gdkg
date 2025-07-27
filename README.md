@@ -80,20 +80,6 @@ Menu guides you through:
 - [2] Revoke existing key
 - [3] Exit
 
-### CLI mode (direct commands)
-
-```
-# Generate key
-./gdkg generate --repo=my-repo-name --email=your@email.com --dir=~/.ssh/gdkg
-
-# Revoke key
-./gdkg revoke --repo=my-repo-name --dir=~/.ssh/gdkg
-```
-
-After generation, public key is output. Add it on GitHub under:
-**Settings → Deploy keys → Add deploy key**
-
----
 
 ## 📁 File structure
 
