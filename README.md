@@ -44,7 +44,7 @@ Download the appropriate binary for your platform from the [[Releases]] section 
 1. **Make the binary executable:**
 
 ```bash
-chmod `x gdkg-v1.0.0-linux-amd64
+chmod +x gdkg-v1.0.0-linux-amd64
 ```
 
 2. **Run the application via terminal:**
