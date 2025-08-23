@@ -18,7 +18,7 @@ It automates deploy key workflows and ensures a clean, secure setup.
 
 
 ### Bonus 🎁
-**Claude Code Trigger**, you can have Claude Code create the deploy for you so that you only have to add it to gihtub. Use a prompt to do this and adjust these {fields}.
+**Claude Code Trigger**, you can have Claude Code create the deploy key for you so that you only have to add it to gihtub. Use a prompt to do this and adjust these {fields}.
 {Apps}= The folder where you saved the gdkg binary application.
 {git@github.com:UserName/AppName.git} = Change it so that your user and app name are correct.
 
