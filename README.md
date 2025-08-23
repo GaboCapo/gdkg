@@ -16,6 +16,19 @@ It automates deploy key workflows and ensures a clean, secure setup.
 - 📦 Small, portable binary with no dependencies
 - ⚙️ Compatible with CI/CD pipelines and personal projects
 
+
+### Bonus 🎁
+**Claude Code Trigger**, you can have Claude Code create the deploy for you so that you only have to add it to gihtub. Use a prompt to do this and adjust these {fields}.
+{Apps}= The folder where you saved the gdkg binary application.
+{git@github.com:UserName/AppName.git} = Change it so that your user and app name are correct.
+
+Example of initialising an empty repository:
+
+```
+The next step is to initialise the repository. We have a special tool called gdkg that can be used to generate deploys. Look for it in the {Apps} folder. It should be there. Run it, create a deploy, give it to me, and I'll let you know when I've added it. You can already prepare everything.
+I've already created a repository on GitHub at {git@github.com:UserName/AppName.git}. It's completely empty and now needs to be initialised. Give me the deploy key first.
+```
+
 ---
 
 ## 📦 Installation / Run
