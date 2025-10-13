@@ -29,6 +29,9 @@ The next step is to initialise the repository. We have a special tool called gdk
 I've already created a repository on GitHub at {git@github.com:UserName/AppName.git}. It's completely empty and now needs to be initialised. Give me the deploy key first.
 ```
 
+> :warning: **Be aware that when you use it like that, this means the deploy key is transmitted via the LLM provider!** : Do not use it in critical projects; instead, create the deploy key manually if you want to be sure.
+
+
 ---
 
 ## 📦 Installation / Run
